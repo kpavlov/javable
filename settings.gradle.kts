@@ -26,4 +26,3 @@ include(":javable-annotations")
 include(":javable-ksp")
 
 rootProject.name = "javable"
-include("javable-ksp")

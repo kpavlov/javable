@@ -1,6 +1,6 @@
 # Default task
 .PHONY: all
-all: clean build
+all: clean build apidocs
 
 # Run unit tests
 .PHONY: test
@@ -16,6 +16,11 @@ clean:
 .PHONY: build
 build:
 	./gradlew build
+
+# Generate API documentation
+.PHONY: apidocs
+apidocs:
+	./gradlew dokkaGenerateHtml
 
 # Publish to Maven Local
 .PHONY: publish

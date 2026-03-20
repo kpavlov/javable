@@ -1,5 +1,6 @@
 plugins {
     id("buildsrc.convention.kotlin-jvm")
+    id("buildsrc.convention.dokka-convention")
 }
 
 kotlin {
@@ -10,14 +11,11 @@ kotlin {
         implementation(libs.ksp.symbol.processing.common.deps)
 
         implementation(libs.ksp.api)
-        implementation("com.palantir.javapoet:javapoet:0.12.0")
-        implementation("com.squareup:kotlinpoet-ksp:2.2.0")
+        implementation(project(":javable-annotations"))
+        implementation(libs.javapoet)
+        implementation(libs.kotlinpoet)
         testImplementation(kotlin("test-junit5"))
-        testImplementation(platform("org.junit:junit-bom:5.10.0"))
-        testImplementation("org.junit.jupiter:junit-jupiter")
-        testRuntimeOnly("org.junit.platform:junit-platform-launcher")
-
-
+        testImplementation(platform(libs.junit.bom))
     }
 }
 

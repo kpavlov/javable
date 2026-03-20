@@ -10,8 +10,13 @@ plugins {
 }
 
 kotlin {
+    explicitApi()
     // Use a specific Java version to make it easier to work in different environments.
     jvmToolchain(17)
+    compilerOptions {
+        javaParameters = true
+        progressiveMode = true
+    }
 }
 
 tasks.withType<Test>().configureEach {

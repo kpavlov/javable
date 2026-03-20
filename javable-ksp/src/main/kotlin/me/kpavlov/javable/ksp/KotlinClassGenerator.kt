@@ -1,14 +1,10 @@
 package me.kpavlov.javable.ksp
 
-import com.google.devtools.ksp.isConstructor
 import com.google.devtools.ksp.isInternal
-import com.google.devtools.ksp.isPrivate
 import com.google.devtools.ksp.isProtected
 import com.google.devtools.ksp.isPublic
-import com.google.devtools.ksp.symbol.KSAnnotation
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
-import com.google.devtools.ksp.symbol.KSType
 import com.google.devtools.ksp.symbol.Modifier
 import com.squareup.kotlinpoet.AnnotationSpec
 import com.squareup.kotlinpoet.ClassName
@@ -38,20 +34,10 @@ internal object KotlinClassGenerator : KotlinGenerator {
     ): FileSpec.Builder {
         val delegateClassName = ClassName(packageName, kotlinClassDeclaration.simpleName.asString())
 
-        val functions = kotlinClassDeclaration
-            .getAllFunctions()
-            .filterNot { it.isAbstract }
-            .filterNot { it.isConstructor() }
-            .filterNot { it.simpleName.asString() in listOf("equals", "hashCode", "toString") }
-            .filterNot { it.isPrivate() }
-            .toList()
+        val functions = kotlinClassDeclaration.getWrapperFunctions()
 
-        val hasAsyncMethods = functions.any { fn ->
-            fn.annotations.any { it.shortName.asString() == "AsyncJavaApi" }
-        }
-        val hasBlockingMethods = functions.any { fn ->
-            fn.annotations.any { it.shortName.asString() == "BlockingJavaApi" }
-        }
+        val hasAsyncMethods = functions.hasAnnotation(ASYNC_JAVA_API)
+        val hasBlockingMethods = functions.hasAnnotation(BLOCKING_JAVA_API)
 
         val constructor = if (hasAsyncMethods) {
             val constructorBuilder = FunSpec.constructorBuilder()
@@ -103,8 +89,8 @@ internal object KotlinClassGenerator : KotlinGenerator {
         }
 
         for (function in functions) {
-            val asyncAnno = function.annotations.find { it.shortName.asString() == "AsyncJavaApi" }
-            val blockingAnno = function.annotations.find { it.shortName.asString() == "BlockingJavaApi" }
+            val asyncAnno = function.findAnnotationByName(ASYNC_JAVA_API)
+            val blockingAnno = function.findAnnotationByName(BLOCKING_JAVA_API)
             when {
                 asyncAnno != null -> {
                     val wt = resolveWrapperType(asyncAnno)
@@ -149,15 +135,6 @@ internal object KotlinClassGenerator : KotlinGenerator {
 
         return fileBuilder
             .addType(classBuilder.build())
-    }
-
-    private fun resolveWrapperType(anno: KSAnnotation): String {
-        val value = anno.arguments.find { it.name?.asString() == "wrapperType" }?.value
-        return when (value) {
-            is KSType -> value.declaration.simpleName.asString()
-            is String -> value
-            else -> "COMPLETABLE_FUTURE"
-        }
     }
 
     private fun generateKotlinBlockingFun(function: KSFunctionDeclaration): FunSpec {

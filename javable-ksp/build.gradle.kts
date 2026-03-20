@@ -12,7 +12,7 @@ kotlin {
         implementation(libs.ksp.api)
         implementation(project(":javable-annotations"))
         implementation(libs.javapoet)
-        implementation(libs.kotlipoet)
+        implementation(libs.kotlinpoet)
         testImplementation(kotlin("test-junit5"))
         testImplementation(platform(libs.junit.bom))
     }

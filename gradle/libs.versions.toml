@@ -27,7 +27,7 @@ kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-t
 #kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
 
 javapoet = { module = "com.palantir.javapoet:javapoet", version.ref = "javaPoet" }
-kotlipoet = { module = "com.squareup:kotlinpoet-ksp", version.ref = "kotlinPoet" }
+kotlinpoet = { module = "com.squareup:kotlinpoet-ksp", version.ref = "kotlinPoet" }
 junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
 
 

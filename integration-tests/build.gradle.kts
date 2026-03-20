@@ -5,14 +5,6 @@ plugins {
     alias(libs.plugins.google.ksp)
 }
 
-
-//group = rootProject.group
-//version = rootProject.version
-
-kotlin {
-//    explicitApi = ExplicitApiMode.
-}
-
 kotlin {
     dependencies {
         api(project(":javable-annotations"))

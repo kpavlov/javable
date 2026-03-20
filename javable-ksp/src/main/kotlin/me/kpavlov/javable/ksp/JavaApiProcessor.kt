@@ -10,15 +10,6 @@ import me.kpavlov.javable.annotations.JavaApi
 
 private const val PREFIX = "me.kpavlov.javable"
 
-/**
- * KSP processor that generates extension properties for classes and functions,
- * annotated with `@Schema`.
- *
- * For a class annotated with @Schema, this processor generates an extension property:
- * ```kotlin
- * val MyClass.jsonSchemaString: String get() = "..."
- * ```
- */
 internal class JavaApiProcessor(
     private val codeGenerator: CodeGenerator,
     private val logger: KSPLogger,
@@ -91,8 +82,13 @@ internal class JavaApiProcessor(
             val packageName = classDeclaration.packageName.asString()
 
             if (javaApiAnnotation.javaWrapper) {
-                val generator = if (javaApiAnnotation.autoCloseable) JavaCloseableClassGenerator else JavaClassGenerator
-                generateJavaFile(generator, simpleName, classDeclaration, packageName)
+                generateJavaFile(
+                    JavaClassGenerator,
+                    simpleName,
+                    classDeclaration,
+                    packageName,
+                    autoCloseable = javaApiAnnotation.autoCloseable,
+                )
             }
 
             if (javaApiAnnotation.kotlinWrapper) {
@@ -119,7 +115,7 @@ internal class JavaApiProcessor(
             kotlinClassDeclaration = classDeclaration,
             packageName = packageName,
             className = kotlinClassName,
-        )
+        ).build()
 
         codeGenerator.createNewFile(
             Dependencies(aggregating = false, classDeclaration.containingFile!!),
@@ -133,20 +129,22 @@ internal class JavaApiProcessor(
         generator: JavaGenerator,
         simpleName: String,
         classDeclaration: KSClassDeclaration,
-        packageName: String
+        packageName: String,
+        autoCloseable: Boolean = false,
     ) {
         val javaClassName = "${simpleName}Java"
         val javaFile = generator.generateJavaClass(
             kotlinClassDeclaration = classDeclaration,
             packageName = packageName,
             className = javaClassName,
-        )
+            autoCloseable = autoCloseable,
+        ).build()
 
         codeGenerator.createNewFile(
             Dependencies(aggregating = false, classDeclaration.containingFile!!),
             packageName = packageName,
             fileName = javaClassName,
             extensionName = "java",
-        ).bufferedWriter().use { javaFile.build().writeTo(it) }
+        ).bufferedWriter().use { javaFile.writeTo(it) }
     }
 }

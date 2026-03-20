@@ -8,5 +8,6 @@ internal interface JavaGenerator {
         packageName: String,
         className: String,
         kotlinClassDeclaration: KSClassDeclaration,
+        autoCloseable: Boolean = false,
     ): JavaFile.Builder
 }

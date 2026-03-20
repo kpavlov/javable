@@ -2,16 +2,14 @@ package me.kpavlov.javable.ksp
 
 import com.google.devtools.ksp.isConstructor
 import com.google.devtools.ksp.isPublic
-import com.google.devtools.ksp.symbol.KSClassDeclaration
-import com.google.devtools.ksp.symbol.KSFunctionDeclaration
-import com.google.devtools.ksp.symbol.KSTypeReference
-import com.google.devtools.ksp.symbol.Modifier
+import com.google.devtools.ksp.symbol.*
 import com.palantir.javapoet.*
 import javax.lang.model.element.Modifier as JavaModifier
 
-object JavaClassGenerator : JavaGenerator {
+internal object JavaClassGenerator : JavaGenerator {
 
     private val FUTURE_KT = ClassName.get("kotlinx.coroutines.future", "FutureKt")
+    private val BUILDERS_KT = ClassName.get("kotlinx.coroutines", "BuildersKt")
     private val SUPERVISION_KT = ClassName.get("kotlinx.coroutines", "SupervisorKt")
     private val COROUTINE_SCOPE_KT = ClassName.get("kotlinx.coroutines", "CoroutineScopeKt")
     private val COROUTINE_SCOPE = ClassName.get("kotlinx.coroutines", "CoroutineScope")
@@ -22,17 +20,38 @@ object JavaClassGenerator : JavaGenerator {
     private val COROUTINE_START = ClassName.get("kotlinx.coroutines", "CoroutineStart")
     private val EXECUTORS_KT = ClassName.get("kotlinx.coroutines", "ExecutorsKt")
     private val COMPLETABLE_FUTURE = ClassName.get("java.util.concurrent", "CompletableFuture")
+    private val COMPLETION_STAGE = ClassName.get("java.util.concurrent", "CompletionStage")
     private val EXECUTOR = ClassName.get("java.util.concurrent", "Executor")
     private val AUTO_CLOSEABLE = ClassName.get("java.lang", "AutoCloseable")
     private val GENERATED = ClassName.get("javax.annotation.processing", "Generated")
+    private val TIME_UNIT = ClassName.get("java.util.concurrent", "TimeUnit")
+    private val EXECUTION_EXCEPTION = ClassName.get("java.util.concurrent", "ExecutionException")
+    private val TIMEOUT_EXCEPTION = ClassName.get("java.util.concurrent", "TimeoutException")
+    private val THROWABLE = ClassName.get("java.lang", "Throwable")
+    private val RUNTIME_EXCEPTION = ClassName.get("java.lang", "RuntimeException")
+    private val OBJECT = ClassName.get("java.lang", "Object")
 
     override fun generateJavaClass(
         packageName: String,
         className: String,
         kotlinClassDeclaration: KSClassDeclaration,
+        autoCloseable: Boolean,
     ): JavaFile.Builder {
         val kotlinClassName =
             ClassName.get(packageName, kotlinClassDeclaration.simpleName.asString())
+
+        val functions = kotlinClassDeclaration
+            .getAllFunctions()
+            .filterNot { it.isAbstract }
+            .filterNot { it.isConstructor() }
+            .filterNot { it.simpleName.asString() in listOf("equals", "hashCode", "toString") }
+            .filter { it.isPublic() }
+            .toList()
+
+        val hasAsyncMethods = functions.any { fn ->
+            fn.annotations.any { it.shortName.asString() == "AsyncJavaApi" }
+        }
+        val needsScope = autoCloseable || hasAsyncMethods
 
         val classBuilder =
             TypeSpec
@@ -43,12 +62,19 @@ object JavaClassGenerator : JavaGenerator {
                         .addMember("value", $$"$S", JavaClassGenerator::class.qualifiedName)
                         .build(),
                 ).addModifiers(JavaModifier.PUBLIC, JavaModifier.FINAL)
-                .addSuperinterface(AUTO_CLOSEABLE)
                 .addField(
                     FieldSpec
                         .builder(kotlinClassName, "delegate", JavaModifier.PRIVATE, JavaModifier.FINAL)
                         .build(),
-                ).addField(
+                )
+
+        if (autoCloseable) {
+            classBuilder.addSuperinterface(AUTO_CLOSEABLE)
+        }
+
+        if (needsScope) {
+            classBuilder
+                .addField(
                     FieldSpec
                         .builder(JOB, "scopeJob", JavaModifier.PRIVATE, JavaModifier.FINAL)
                         .build(),
@@ -85,52 +111,115 @@ object JavaClassGenerator : JavaGenerator {
                             COROUTINE_SCOPE_KT,
                             EXECUTORS_KT,
                         ).build(),
-                ).addMethod(
-                    MethodSpec
-                        .methodBuilder("close")
-                        .addAnnotation(Override::class.java)
-                        .addModifiers(JavaModifier.PUBLIC)
-                        .addStatement(
-                            $$"$T<Void> done = new $T<>()",
-                            COMPLETABLE_FUTURE,
-                            COMPLETABLE_FUTURE,
-                        ).addStatement(
-                            $$"this.scopeJob.invokeOnCompletion(cause -> { done.complete(null); return $T.INSTANCE; })",
-                            KOTLIN_UNIT,
-                        ).addStatement(
-                            $$"$T.cancel(this.scope, \"closed\", null)",
-                            COROUTINE_SCOPE_KT,
-                        ).beginControlFlow("try")
-                        .addStatement("done.get()")
-                        .nextControlFlow(
-                            $$"catch ($T e)",
-                            ClassName.get("java.lang", "InterruptedException"),
-                        ).addStatement(
-                            $$"$T.currentThread().interrupt()",
-                            ClassName.get("java.lang", "Thread"),
-                        ).nextControlFlow(
-                            $$"catch ($T ignored)",
-                            ClassName.get("java.lang", "Exception"),
-                        ).endControlFlow()
-                        .build(),
                 )
+        } else {
+            classBuilder.addMethod(
+                MethodSpec
+                    .constructorBuilder()
+                    .addModifiers(JavaModifier.PUBLIC)
+                    .addParameter(kotlinClassName, "delegate")
+                    .addStatement("this.delegate = delegate")
+                    .build(),
+            )
+        }
 
-        for (function in kotlinClassDeclaration
-            .getAllFunctions()
-            .filterNot { it.isAbstract }
-            .filterNot { it.isConstructor() }
-            .filterNot { it.simpleName.asString() in listOf("equals", "hashCode", "toString") }
-            .filter { it.isPublic() }
-        ) {
-            if (Modifier.SUSPEND in function.modifiers) {
-                classBuilder.addMethod(generateSuspendMethod(function, withExecutor = false))
-                classBuilder.addMethod(generateSuspendMethod(function, withExecutor = true))
-            } else {
-                classBuilder.addMethod(generateRegularMethod(function))
+        if (autoCloseable) {
+
+            classBuilder.addMethod(
+                MethodSpec
+                    .methodBuilder("close")
+                    .addAnnotation(Override::class.java)
+                    .addModifiers(JavaModifier.PUBLIC)
+                    .addStatement(
+                        $$"$T<Void> done = new $T<>()",
+                        COMPLETABLE_FUTURE,
+                        COMPLETABLE_FUTURE,
+                    ).addStatement(
+                        $$"this.scopeJob.invokeOnCompletion(cause -> { done.complete(null); return $T.INSTANCE; })",
+                        KOTLIN_UNIT,
+                    ).addStatement(
+                        $$"$T.cancel(this.scope, \"closed\", null)",
+                        COROUTINE_SCOPE_KT,
+                    ).beginControlFlow("try")
+                    .addStatement($$"done.get(5L, $T.SECONDS)", TIME_UNIT)
+                    .nextControlFlow(
+                        $$"catch ($T e)",
+                        ClassName.get("java.lang", "InterruptedException"),
+                    ).addStatement(
+                        $$"$T.currentThread().interrupt()",
+                        ClassName.get("java.lang", "Thread"),
+                    ).nextControlFlow($$"catch ($T e)", EXECUTION_EXCEPTION)
+                    .addStatement($$"$T cause = e.getCause()", THROWABLE)
+                    .beginControlFlow($$"if (cause instanceof $T)", RUNTIME_EXCEPTION)
+                    .addStatement($$"throw ($T) cause", RUNTIME_EXCEPTION)
+                    .endControlFlow()
+                    .addStatement($$"throw new $T(cause)", RUNTIME_EXCEPTION)
+                    .nextControlFlow($$"catch ($T e)", TIMEOUT_EXCEPTION)
+                    .addStatement($$"throw new $T(\"Scope did not close within 5 seconds\", e)", RUNTIME_EXCEPTION)
+                    .endControlFlow()
+                    .build(),
+            )
+        }
+
+        for (function in functions) {
+            val asyncAnno = function.annotations.find { it.shortName.asString() == "AsyncJavaApi" }
+            val blockingAnno = function.annotations.find { it.shortName.asString() == "BlockingJavaApi" }
+            when {
+                asyncAnno != null -> {
+                    val wt = resolveWrapperType(asyncAnno)
+                    classBuilder.addMethod(generateAsyncMethod(function, wt, withExecutor = false))
+                    classBuilder.addMethod(generateAsyncMethod(function, wt, withExecutor = true))
+                }
+
+                blockingAnno != null -> classBuilder.addMethod(generateBlockingMethod(function))
+                !function.modifiers.contains(Modifier.SUSPEND) -> classBuilder.addMethod(generateRegularMethod(function))
+                // suspend without annotation → skip
             }
         }
 
         return JavaFile.builder(packageName, classBuilder.build())
+    }
+
+    private fun resolveWrapperType(anno: KSAnnotation): String {
+        val value = anno.arguments.find { it.name?.asString() == "wrapperType" }?.value
+        return when (value) {
+            is KSType -> value.declaration.simpleName.asString()
+            is String -> value
+            else -> "COMPLETABLE_FUTURE"
+        }
+    }
+
+    private fun generateBlockingMethod(function: KSFunctionDeclaration): MethodSpec {
+        val methodName = function.simpleName.asString()
+        val returnType = resolveTypeName(function.returnType)
+
+        val builder =
+            MethodSpec
+                .methodBuilder(methodName)
+                .addModifiers(JavaModifier.PUBLIC)
+                .addException(ClassName.get("java.lang", "InterruptedException"))
+                .returns(returnType)
+
+        val paramNames = addParameters(builder, function)
+        val callArgs = (paramNames + "continuation").joinToString(", ")
+
+        if (returnType == TypeName.VOID) {
+            builder.addStatement(
+                $$"$T.runBlocking($T.INSTANCE, (s, continuation) -> delegate.$$methodName($$callArgs))",
+                BUILDERS_KT,
+                EMPTY_COROUTINE_CONTEXT,
+            )
+        } else {
+            val boxedReturn = resolveTypeName(function.returnType, boxed = true)
+            builder.addStatement(
+                $$"return ($T) $T.runBlocking($T.INSTANCE, (s, continuation) -> delegate.$$methodName($$callArgs))",
+                boxedReturn,
+                BUILDERS_KT,
+                EMPTY_COROUTINE_CONTEXT,
+            )
+        }
+
+        return builder.build()
     }
 
     private fun generateRegularMethod(function: KSFunctionDeclaration): MethodSpec {
@@ -156,19 +245,20 @@ object JavaClassGenerator : JavaGenerator {
     }
 
     /**
-     * Generates a suspend function wrapper that returns `CompletableFuture<T>`.
+     * Generates an async function wrapper returning `CompletableFuture<T>` or `CompletionStage<T>`.
      *
      * - Without executor: runs on the scope's default dispatcher.
-     * - With executor: runs on the caller-supplied Executor — non-blocking,
-     *   works with virtual threads and any thread pool.
+     * - With executor: runs on the caller-supplied Executor.
      */
-    private fun generateSuspendMethod(
+    private fun generateAsyncMethod(
         function: KSFunctionDeclaration,
+        wrapperType: String,
         withExecutor: Boolean,
     ): MethodSpec {
         val methodName = function.simpleName.asString()
         val rawReturn = resolveTypeName(function.returnType, boxed = true)
-        val returnType = ParameterizedTypeName.get(COMPLETABLE_FUTURE, rawReturn)
+        val futureClass = if (wrapperType == "COMPLETION_STAGE") COMPLETION_STAGE else COMPLETABLE_FUTURE
+        val returnType = ParameterizedTypeName.get(futureClass, rawReturn)
 
         val builder =
             MethodSpec
@@ -214,6 +304,38 @@ object JavaClassGenerator : JavaGenerator {
         return names
     }
 
+    /** Maps Kotlin stdlib collection/declared type names to their Java equivalents. */
+    private val KOTLIN_TO_JAVA_CLASSES: Map<String, ClassName> = mapOf(
+        "kotlin.collections.List" to ClassName.get("java.util", "List"),
+        "kotlin.collections.MutableList" to ClassName.get("java.util", "List"),
+        "kotlin.collections.Set" to ClassName.get("java.util", "Set"),
+        "kotlin.collections.MutableSet" to ClassName.get("java.util", "Set"),
+        "kotlin.collections.Map" to ClassName.get("java.util", "Map"),
+        "kotlin.collections.MutableMap" to ClassName.get("java.util", "Map"),
+        "kotlin.collections.Collection" to ClassName.get("java.util", "Collection"),
+        "kotlin.collections.MutableCollection" to ClassName.get("java.util", "Collection"),
+        "kotlin.collections.Iterable" to ClassName.get("java.lang", "Iterable"),
+        "kotlin.collections.MutableIterable" to ClassName.get("java.lang", "Iterable"),
+        "kotlin.collections.Iterator" to ClassName.get("java.util", "Iterator"),
+        "kotlin.collections.MutableIterator" to ClassName.get("java.util", "Iterator"),
+    )
+
+    /** Maps Kotlin primitive/standard qualified names to a lambda that returns
+     *  the appropriate JavaPoet [TypeName] given whether boxing is required. */
+    private val KOTLIN_TO_JAVA_PRIMITIVES: Map<String, (Boolean) -> TypeName> = mapOf(
+        "kotlin.Unit" to { useBoxed -> if (useBoxed) ClassName.get("java.lang", "Void") else TypeName.VOID },
+        "kotlin.Int" to { useBoxed -> if (useBoxed) TypeName.INT.box() else TypeName.INT },
+        "kotlin.Long" to { useBoxed -> if (useBoxed) TypeName.LONG.box() else TypeName.LONG },
+        "kotlin.Double" to { useBoxed -> if (useBoxed) TypeName.DOUBLE.box() else TypeName.DOUBLE },
+        "kotlin.Float" to { useBoxed -> if (useBoxed) TypeName.FLOAT.box() else TypeName.FLOAT },
+        "kotlin.Boolean" to { useBoxed -> if (useBoxed) TypeName.BOOLEAN.box() else TypeName.BOOLEAN },
+        "kotlin.Char" to { useBoxed -> if (useBoxed) TypeName.CHAR.box() else TypeName.CHAR },
+        "kotlin.Short" to { useBoxed -> if (useBoxed) TypeName.SHORT.box() else TypeName.SHORT },
+        "kotlin.Byte" to { useBoxed -> if (useBoxed) TypeName.BYTE.box() else TypeName.BYTE },
+        "kotlin.String" to { _ -> ClassName.get("java.lang", "String") },
+        "kotlin.Any" to { _ -> ClassName.get("java.lang", "Object") },
+    )
+
     fun resolveTypeName(
         typeReference: KSTypeReference?,
         boxed: Boolean = false,
@@ -225,22 +347,38 @@ object JavaClassGenerator : JavaGenerator {
             ?: return ClassName.get("java.lang", "Object")
         val useBoxed = boxed || resolved.isMarkedNullable
 
-        return when (qualifiedName) {
-            "kotlin.Unit" -> if (useBoxed) ClassName.get("java.lang", "Void") else TypeName.VOID
-            "kotlin.Int" -> if (useBoxed) TypeName.INT.box() else TypeName.INT
-            "kotlin.Long" -> if (useBoxed) TypeName.LONG.box() else TypeName.LONG
-            "kotlin.Double" -> if (useBoxed) TypeName.DOUBLE.box() else TypeName.DOUBLE
-            "kotlin.Float" -> if (useBoxed) TypeName.FLOAT.box() else TypeName.FLOAT
-            "kotlin.Boolean" -> if (useBoxed) TypeName.BOOLEAN.box() else TypeName.BOOLEAN
-            "kotlin.Char" -> if (useBoxed) TypeName.CHAR.box() else TypeName.CHAR
-            "kotlin.Short" -> if (useBoxed) TypeName.SHORT.box() else TypeName.SHORT
-            "kotlin.Byte" -> if (useBoxed) TypeName.BYTE.box() else TypeName.BYTE
-            "kotlin.String" -> ClassName.get("java.lang", "String")
-            "kotlin.Any" -> ClassName.get("java.lang", "Object")
-            else -> {
-                val decl = resolved.declaration
-                ClassName.get(decl.packageName.asString(), decl.simpleName.asString())
+        // Scalar / primitive types — return immediately
+        KOTLIN_TO_JAVA_PRIMITIVES[qualifiedName]?.invoke(useBoxed)?.let { return it }
+
+        // Resolve raw ClassName, mapping Kotlin stdlib types to Java equivalents
+        val rawType = KOTLIN_TO_JAVA_CLASSES[qualifiedName]
+            ?: ClassName.get(resolved.declaration.packageName.asString(), resolved.declaration.simpleName.asString())
+
+        // Attach type arguments to produce ParameterizedTypeName when present
+        val args = resolved.arguments
+        if (args.isEmpty()) return rawType
+
+        val typeArgs: Array<TypeName> = args.map { arg ->
+
+            when (arg.variance) {
+                Variance.STAR -> WildcardTypeName.subtypeOf(OBJECT)
+                Variance.COVARIANT -> arg.type?.let { WildcardTypeName.subtypeOf(resolveTypeName(it, boxed = true)) }
+                    ?: WildcardTypeName.subtypeOf(OBJECT)
+
+                Variance.CONTRAVARIANT -> arg.type?.let {
+                    WildcardTypeName.supertypeOf(
+                        resolveTypeName(
+                            it,
+                            boxed = true
+                        )
+                    )
+                }
+                    ?: WildcardTypeName.subtypeOf(OBJECT)
+
+                else -> arg.type?.let { resolveTypeName(it, boxed = true) } ?: OBJECT
             }
-        }
+        }.toTypedArray()
+
+        return ParameterizedTypeName.get(rawType, *typeArgs)
     }
 }

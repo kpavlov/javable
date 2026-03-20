@@ -16,7 +16,7 @@ import com.squareup.kotlinpoet.PropertySpec
 import com.squareup.kotlinpoet.TypeSpec
 import com.squareup.kotlinpoet.ksp.toTypeName
 
-object KotlinClassGenerator {
+object KotlinClassGenerator : KotlinGenerator {
 
     private val COMPLETABLE_FUTURE = ClassName("java.util.concurrent", "CompletableFuture")
     private val EXECUTOR = ClassName("java.util.concurrent", "Executor")
@@ -24,7 +24,7 @@ object KotlinClassGenerator {
     private val DISPATCHERS = ClassName("kotlinx.coroutines", "Dispatchers")
     private val SUPERVISOR_JOB = MemberName("kotlinx.coroutines", "SupervisorJob")
 
-    fun generateWrapper(
+    override fun generateWrapper(
         packageName: String,
         className: String,
         kotlinClassDeclaration: KSClassDeclaration,

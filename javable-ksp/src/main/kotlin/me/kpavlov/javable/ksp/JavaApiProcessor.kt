@@ -1,9 +1,12 @@
 package me.kpavlov.javable.ksp
 
+import com.google.devtools.ksp.KspExperimental
+import com.google.devtools.ksp.getAnnotationsByType
 import com.google.devtools.ksp.processing.*
 import com.google.devtools.ksp.symbol.KSAnnotated
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.validate
+import me.kpavlov.javable.annotations.JavaApi
 
 private const val PREFIX = "me.kpavlov.javable"
 
@@ -29,12 +32,12 @@ internal class JavaApiProcessor(
     }
 
     override fun finish() {
-        logger.info("[koog-ksp] ✅ Done!")
+        logger.info("[javable-ksp] ✅ Done!")
     }
 
     override fun onError() {
         logger.error(
-            "[koog-ksp] 💥 Error! KSP Processor Options: ${
+            "[javable-ksp] 💥 Error! KSP Processor Options: ${
                 options.entries.joinToString(
                     prefix = "[",
                     separator = ", ",
@@ -47,10 +50,10 @@ internal class JavaApiProcessor(
     override fun process(resolver: Resolver): List<KSAnnotated> {
         val enabled = options[OPTION_ENABLED]?.trim()?.takeIf { it.isNotEmpty() } != "false"
 
-        logger.info("[koog-ksp] Options: ${options.entries.joinToString()}")
+        logger.info("[javable-ksp] Options: ${options.entries.joinToString()}")
 
         if (!enabled) {
-            logger.info("[koog-ksp] Plugin is disabled")
+            logger.info("[javable-ksp] Plugin is disabled")
             return emptyList()
         }
 
@@ -60,62 +63,90 @@ internal class JavaApiProcessor(
             resolver
                 .getSymbolsWithAnnotation(JAVA_API_ANNOTATION)
 
-        processClassDeclarations(symbols.filterIsInstance<KSClassDeclaration>(), unprocessable)
-
-        return unprocessable
-    }
-
-    private fun processClassDeclarations(
-        classDeclarations: Sequence<KSClassDeclaration>,
-        unprocessable: MutableList<KSAnnotated>,
-    ) {
-        classDeclarations.forEach { classDeclaration ->
+        symbols.filterIsInstance<KSClassDeclaration>().forEach { classDeclaration ->
             if (!classDeclaration.validate()) {
                 unprocessable.add(classDeclaration)
                 return@forEach
             }
 
-            @Suppress("TooGenericExceptionCaught")
-            try {
-                val qualifiedName = classDeclaration.qualifiedName?.asString()
-                logger.warn("🪛 Processing $qualifiedName...")
-
-                val simpleName = classDeclaration.simpleName.asString()
-                val packageName = classDeclaration.packageName.asString()
-                val javaClassName = "${simpleName}Java"
-                val kotlinClassName = "${simpleName}Kotlin"
-
-                val javaFile = JavaClassGenerator.generateJavaClass(
-                    kotlinClassDeclaration = classDeclaration,
-                    packageName = packageName,
-                    className = javaClassName,
-                )
-
-                codeGenerator.createNewFile(
-                    Dependencies(aggregating = false, classDeclaration.containingFile!!),
-                    packageName = packageName,
-                    fileName = javaClassName,
-                    extensionName = "java",
-                ).bufferedWriter().use { javaFile.build().writeTo(it) }
-
-                val kotlinFile = KotlinClassGenerator.generateWrapper(
-                    kotlinClassDeclaration = classDeclaration,
-                    packageName = packageName,
-                    className = kotlinClassName,
-                )
-
-                codeGenerator.createNewFile(
-                    Dependencies(aggregating = false, classDeclaration.containingFile!!),
-                    packageName = packageName,
-                    fileName = kotlinClassName,
-                    extensionName = "kt",
-                ).bufferedWriter().use { kotlinFile.writeTo(it) }
-            } catch (e: Exception) {
-                logger.error(
-                    "Failed to generate schema extension " +
-                            "for ${classDeclaration.qualifiedName?.asString()}: ${e.message}",
-                )
-            }
+            processClassDeclaration(classDeclaration, unprocessable)
         }
+
+        return unprocessable
+    }
+
+    @OptIn(KspExperimental::class)
+    @Suppress("TooGenericExceptionCaught")
+    private fun processClassDeclaration(
+        classDeclaration: KSClassDeclaration,
+        unprocessable: MutableList<KSAnnotated>,
+    ) {
+        try {
+            val qualifiedName = classDeclaration.qualifiedName?.asString()
+            logger.warn("🪛 Processing $qualifiedName...")
+
+            val javaApiAnnotation = classDeclaration.getAnnotationsByType(JavaApi::class).single()
+
+            val simpleName = classDeclaration.simpleName.asString()
+            val packageName = classDeclaration.packageName.asString()
+
+            if (javaApiAnnotation.javaWrapper) {
+                val generator = if (javaApiAnnotation.autoCloseable) JavaCloseableClassGenerator else JavaClassGenerator
+                generateJavaFile(generator, simpleName, classDeclaration, packageName)
+            }
+
+            if (javaApiAnnotation.kotlinWrapper) {
+                val generator = KotlinClassGenerator
+                generateKotlinFile(generator, simpleName, classDeclaration, packageName)
+            }
+        } catch (e: Exception) {
+            unprocessable.add(classDeclaration)
+            logger.error(
+                "Failed to generate schema extension " +
+                        "for ${classDeclaration.qualifiedName?.asString()}: ${e.message}",
+            )
+        }
+    }
+
+    private fun generateKotlinFile(
+        generator: KotlinGenerator,
+        simpleName: String,
+        classDeclaration: KSClassDeclaration,
+        packageName: String
+    ) {
+        val kotlinClassName = "${simpleName}Kotlin"
+        val kotlinFile = generator.generateWrapper(
+            kotlinClassDeclaration = classDeclaration,
+            packageName = packageName,
+            className = kotlinClassName,
+        )
+
+        codeGenerator.createNewFile(
+            Dependencies(aggregating = false, classDeclaration.containingFile!!),
+            packageName = packageName,
+            fileName = kotlinClassName,
+            extensionName = "kt",
+        ).bufferedWriter().use { kotlinFile.writeTo(it) }
+    }
+
+    private fun generateJavaFile(
+        generator: JavaGenerator,
+        simpleName: String,
+        classDeclaration: KSClassDeclaration,
+        packageName: String
+    ) {
+        val javaClassName = "${simpleName}Java"
+        val javaFile = generator.generateJavaClass(
+            kotlinClassDeclaration = classDeclaration,
+            packageName = packageName,
+            className = javaClassName,
+        )
+
+        codeGenerator.createNewFile(
+            Dependencies(aggregating = false, classDeclaration.containingFile!!),
+            packageName = packageName,
+            fileName = javaClassName,
+            extensionName = "java",
+        ).bufferedWriter().use { javaFile.build().writeTo(it) }
     }
 }

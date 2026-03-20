@@ -7,9 +7,10 @@ import com.google.devtools.ksp.symbol.KSFunctionDeclaration
 import com.google.devtools.ksp.symbol.KSTypeReference
 import com.google.devtools.ksp.symbol.Modifier
 import com.palantir.javapoet.*
+import com.squareup.kotlinpoet.asClassName
 import javax.lang.model.element.Modifier as JavaModifier
 
-object JavaClassGenerator : JavaGenerator {
+internal object JavaCloseableClassGenerator : JavaGenerator {
 
     private val FUTURE_KT = ClassName.get("kotlinx.coroutines.future", "FutureKt")
     private val SUPERVISION_KT = ClassName.get("kotlinx.coroutines", "SupervisorKt")
@@ -40,7 +41,7 @@ object JavaClassGenerator : JavaGenerator {
                 .addAnnotation(
                     AnnotationSpec
                         .builder(GENERATED)
-                        .addMember("value", $$"$S", JavaClassGenerator::class.qualifiedName)
+                        .addMember("value", $$"$S", JavaCloseableClassGenerator::class.qualifiedName)
                         .build(),
                 ).addModifiers(JavaModifier.PUBLIC, JavaModifier.FINAL)
                 .addSuperinterface(AUTO_CLOSEABLE)

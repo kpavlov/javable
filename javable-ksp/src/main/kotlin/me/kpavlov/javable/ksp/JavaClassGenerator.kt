@@ -40,6 +40,11 @@ internal object JavaClassGenerator : JavaGenerator {
     private val THROWABLE = ClassName.get("java.lang", "Throwable")
     private val RUNTIME_EXCEPTION = ClassName.get("java.lang", "RuntimeException")
     private val OBJECT = ClassName.get("java.lang", "Object")
+    private val FLOW = ClassName.get("kotlinx.coroutines.flow", "Flow")
+    private val FLOW_KT = ClassName.get("kotlinx.coroutines.flow", "FlowKt")
+    private val STREAM = ClassName.get("java.util.stream", "Stream")
+    private val LIST = ClassName.get("java.util", "List")
+    private val ARRAY_LIST = ClassName.get("java.util", "ArrayList")
 
     override fun generateJavaClass(
         packageName: String,
@@ -52,7 +57,7 @@ internal object JavaClassGenerator : JavaGenerator {
 
         val functions = kotlinClassDeclaration.getWrapperFunctions()
 
-        val hasAsyncMethods = functions.hasAnnotation(ASYNC_JAVA_API)
+        val hasAsyncMethods = functions.hasFutureAnnotation()
         val needsScope = autoCloseable || hasAsyncMethods
 
         val classBuilder =
@@ -171,9 +176,13 @@ internal object JavaClassGenerator : JavaGenerator {
             val blockingAnno = function.findAnnotationByName(BLOCKING_JAVA_API)
             when {
                 asyncAnno != null -> {
-                    val wt = resolveWrapperType(asyncAnno)
-                    classBuilder.addMethod(generateAsyncMethod(function, wt, withExecutor = false))
-                    classBuilder.addMethod(generateAsyncMethod(function, wt, withExecutor = true))
+                    val wt = function.resolveAsyncWrapperType()
+                    if (wt == "STREAM") {
+                        classBuilder.addMethod(generateStreamMethod(function))
+                    } else {
+                        classBuilder.addMethod(generateAsyncMethod(function, wt, withExecutor = false))
+                        classBuilder.addMethod(generateAsyncMethod(function, wt, withExecutor = true))
+                    }
                 }
 
                 blockingAnno != null -> classBuilder.addMethod(generateBlockingMethod(function))
@@ -183,6 +192,54 @@ internal object JavaClassGenerator : JavaGenerator {
         }
 
         return JavaFile.builder(packageName, classBuilder.build())
+    }
+
+    /**
+     * Generates a blocking `Stream<T>` method for a function annotated with
+     * `@AsyncJavaApi(wrapperType = STREAM)` that returns `Flow<T>`.
+     *
+     * - Non-suspend: the Flow is obtained with a direct call; elements are collected via
+     *   `runBlocking { FlowKt.toList(flow, ...) }`.
+     * - Suspend: the Flow is first obtained with a `runBlocking` call, then collected with
+     *   a second `runBlocking`.
+     */
+    private fun generateStreamMethod(function: KSFunctionDeclaration): MethodSpec {
+        val methodName = function.simpleName.asString()
+        val isSuspend = function.modifiers.contains(Modifier.SUSPEND)
+
+        val flowType = function.returnType?.resolve()
+        val elementTypeRef = flowType?.arguments?.firstOrNull()?.type
+        val elementType = resolveTypeName(elementTypeRef, boxed = true)
+        val flowTypeName = ParameterizedTypeName.get(FLOW, elementType)
+        val listTypeName = ParameterizedTypeName.get(LIST, elementType)
+        val streamTypeName = ParameterizedTypeName.get(STREAM, elementType)
+
+        val builder = MethodSpec
+            .methodBuilder(methodName)
+            .addModifiers(JavaModifier.PUBLIC)
+            .addException(ClassName.get("java.lang", "InterruptedException"))
+            .returns(streamTypeName)
+
+        val paramNames = addParameters(builder, function)
+        val callArgs = paramNames.joinToString(", ")
+
+        if (isSuspend) {
+            val callArgsWithCont = (paramNames + "continuation").joinToString(", ")
+            builder
+                .addStatement(
+                    $$"$T flow = ($T) $T.runBlocking($T.INSTANCE, (s, continuation) -> delegate.$$methodName($$callArgsWithCont))",
+                    flowTypeName, flowTypeName, BUILDERS_KT, EMPTY_COROUTINE_CONTEXT,
+                )
+        } else {
+            builder.addStatement($$"$T flow = delegate.$$methodName($$callArgs)", flowTypeName)
+        }
+
+        builder.addStatement(
+            $$"return (($T) $T.runBlocking($T.INSTANCE, (s, continuation) -> $T.toList(flow, new $T<>(), continuation))).stream()",
+            listTypeName, BUILDERS_KT, EMPTY_COROUTINE_CONTEXT, FLOW_KT, ARRAY_LIST,
+        )
+
+        return builder.build()
     }
 
     private fun generateBlockingMethod(function: KSFunctionDeclaration): MethodSpec {

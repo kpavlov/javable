@@ -19,6 +19,19 @@ public enum class JavaWrapperType {
      * The underlying implementation is still a `CompletableFuture`; no runtime overhead is added.
      */
     COMPLETION_STAGE,
+
+    /**
+     * The generated method returns `java.util.stream.Stream<T>` by collecting the `Flow<T>`
+     * blocking via `runBlocking { flow.toList() }`.
+     *
+     * The annotated function must return `kotlinx.coroutines.flow.Flow<T>` and may be either
+     * `suspend` or non-`suspend`. Use this to expose a reactive Kotlin Flow as a synchronous
+     * Java Stream for callers that cannot consume coroutines or reactive streams directly.
+     *
+     * Note: this collects all elements into memory before returning the `Stream`. For very large
+     * or infinite flows, prefer a reactive adapter (`Flux`, `Publisher`) in the future.
+     */
+    STREAM,
 }
 
 /**

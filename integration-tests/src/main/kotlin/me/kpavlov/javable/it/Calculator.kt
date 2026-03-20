@@ -6,7 +6,7 @@ import me.kpavlov.javable.annotations.BlockingJavaApi
 import me.kpavlov.javable.annotations.JavaApi
 
 @JavaApi(javaWrapper = true, autoCloseable = true)
-public class Calculator {
+internal class Calculator {
 
     @AsyncJavaApi
     suspend fun add(a: Int, b: Int): Int {

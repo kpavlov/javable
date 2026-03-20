@@ -12,7 +12,7 @@ import me.kpavlov.javable.annotations.JavaApi
 public class BlockingOnlySubject {
 
     @BlockingJavaApi
-    suspend fun doubled(value: Int): Int {
+    public suspend fun doubled(value: Int): Int {
         delay(5L)
         return value * 2
     }

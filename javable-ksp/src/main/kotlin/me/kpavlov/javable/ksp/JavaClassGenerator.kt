@@ -1,9 +1,23 @@
 package me.kpavlov.javable.ksp
 
 import com.google.devtools.ksp.isConstructor
-import com.google.devtools.ksp.isPublic
-import com.google.devtools.ksp.symbol.*
-import com.palantir.javapoet.*
+import com.google.devtools.ksp.isPrivate
+import com.google.devtools.ksp.symbol.KSAnnotation
+import com.google.devtools.ksp.symbol.KSClassDeclaration
+import com.google.devtools.ksp.symbol.KSFunctionDeclaration
+import com.google.devtools.ksp.symbol.KSType
+import com.google.devtools.ksp.symbol.KSTypeReference
+import com.google.devtools.ksp.symbol.Modifier
+import com.google.devtools.ksp.symbol.Variance
+import com.palantir.javapoet.AnnotationSpec
+import com.palantir.javapoet.ClassName
+import com.palantir.javapoet.FieldSpec
+import com.palantir.javapoet.JavaFile
+import com.palantir.javapoet.MethodSpec
+import com.palantir.javapoet.ParameterizedTypeName
+import com.palantir.javapoet.TypeName
+import com.palantir.javapoet.TypeSpec
+import com.palantir.javapoet.WildcardTypeName
 import javax.lang.model.element.Modifier as JavaModifier
 
 internal object JavaClassGenerator : JavaGenerator {
@@ -45,7 +59,7 @@ internal object JavaClassGenerator : JavaGenerator {
             .filterNot { it.isAbstract }
             .filterNot { it.isConstructor() }
             .filterNot { it.simpleName.asString() in listOf("equals", "hashCode", "toString") }
-            .filter { it.isPublic() }
+            .filterNot { it.isPrivate() }
             .toList()
 
         val hasAsyncMethods = functions.any { fn ->

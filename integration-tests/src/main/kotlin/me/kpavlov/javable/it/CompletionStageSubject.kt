@@ -6,7 +6,7 @@ import me.kpavlov.javable.annotations.JavaApi
 import me.kpavlov.javable.annotations.JavaWrapperType
 
 @JavaApi(javaWrapper = true, kotlinWrapper = true, autoCloseable = true)
-public class CompletionStageSubject {
+internal class CompletionStageSubject {
 
     @AsyncJavaApi(wrapperType = JavaWrapperType.COMPLETION_STAGE)
     suspend fun compute(input: Int): Int {

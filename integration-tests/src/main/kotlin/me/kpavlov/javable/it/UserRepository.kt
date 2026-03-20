@@ -5,7 +5,7 @@ import me.kpavlov.javable.annotations.AsyncJavaApi
 import me.kpavlov.javable.annotations.JavaApi
 
 @JavaApi(autoCloseable = true)
-public class UserRepository(
+internal class UserRepository(
     public val generator: (Int) -> User,
 ) {
 

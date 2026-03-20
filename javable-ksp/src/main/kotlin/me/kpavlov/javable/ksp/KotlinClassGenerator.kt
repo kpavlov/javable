@@ -1,6 +1,9 @@
 package me.kpavlov.javable.ksp
 
 import com.google.devtools.ksp.isConstructor
+import com.google.devtools.ksp.isInternal
+import com.google.devtools.ksp.isPrivate
+import com.google.devtools.ksp.isProtected
 import com.google.devtools.ksp.isPublic
 import com.google.devtools.ksp.symbol.KSAnnotation
 import com.google.devtools.ksp.symbol.KSClassDeclaration
@@ -40,7 +43,7 @@ internal object KotlinClassGenerator : KotlinGenerator {
             .filterNot { it.isAbstract }
             .filterNot { it.isConstructor() }
             .filterNot { it.simpleName.asString() in listOf("equals", "hashCode", "toString") }
-            .filter { it.isPublic() }
+            .filterNot { it.isPrivate() }
             .toList()
 
         val hasAsyncMethods = functions.any { fn ->
@@ -51,7 +54,16 @@ internal object KotlinClassGenerator : KotlinGenerator {
         }
 
         val constructor = if (hasAsyncMethods) {
-            FunSpec.constructorBuilder()
+            val constructorBuilder = FunSpec.constructorBuilder()
+            if (kotlinClassDeclaration.isPublic()) {
+                constructorBuilder.addModifiers(KModifier.PUBLIC)
+            } else if (kotlinClassDeclaration.isInternal()) {
+                constructorBuilder.addModifiers(KModifier.INTERNAL)
+            } else if (kotlinClassDeclaration.isProtected()) {
+                constructorBuilder.addModifiers(KModifier.PROTECTED)
+            }
+
+            constructorBuilder
                 .addAnnotation(AnnotationSpec.builder(JvmOverloads::class).build())
                 .addParameter(ParameterSpec.builder("delegate", delegateClassName).build())
                 .addParameter(
@@ -99,8 +111,13 @@ internal object KotlinClassGenerator : KotlinGenerator {
                     classBuilder.addFunction(generateKotlinAsyncFun(function, wt, withExecutor = false))
                     classBuilder.addFunction(generateKotlinAsyncFun(function, wt, withExecutor = true))
                 }
+
                 blockingAnno != null -> classBuilder.addFunction(generateKotlinBlockingFun(function))
-                !function.modifiers.contains(Modifier.SUSPEND) -> classBuilder.addFunction(generateKotlinRegularFun(function))
+                !function.modifiers.contains(Modifier.SUSPEND) -> classBuilder.addFunction(
+                    generateKotlinRegularFun(
+                        function
+                    )
+                )
                 // suspend without annotation → skip
             }
         }

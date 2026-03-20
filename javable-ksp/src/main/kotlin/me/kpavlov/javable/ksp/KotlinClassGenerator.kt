@@ -26,6 +26,8 @@ internal object KotlinClassGenerator : KotlinGenerator {
     private val COROUTINE_SCOPE = ClassName("kotlinx.coroutines", "CoroutineScope")
     private val DISPATCHERS = ClassName("kotlinx.coroutines", "Dispatchers")
     private val SUPERVISOR_JOB = MemberName("kotlinx.coroutines", "SupervisorJob")
+    private val STREAM = ClassName("java.util.stream", "Stream")
+    private val FLOW_TO_LIST = MemberName("kotlinx.coroutines.flow", "toList")
 
     override fun generateWrapper(
         packageName: String,
@@ -36,8 +38,9 @@ internal object KotlinClassGenerator : KotlinGenerator {
 
         val functions = kotlinClassDeclaration.getWrapperFunctions()
 
-        val hasAsyncMethods = functions.hasAnnotation(ASYNC_JAVA_API)
+        val hasAsyncMethods = functions.hasFutureAnnotation()
         val hasBlockingMethods = functions.hasAnnotation(BLOCKING_JAVA_API)
+        val hasStreamMethods = functions.hasStreamAnnotation()
 
         val constructor = if (hasAsyncMethods) {
             val constructorBuilder = FunSpec.constructorBuilder()
@@ -101,9 +104,13 @@ internal object KotlinClassGenerator : KotlinGenerator {
             val blockingAnno = function.findAnnotationByName(BLOCKING_JAVA_API)
             when {
                 asyncAnno != null -> {
-                    val wt = resolveWrapperType(asyncAnno)
-                    classBuilder.addFunction(generateKotlinAsyncFun(function, wt, withExecutor = false))
-                    classBuilder.addFunction(generateKotlinAsyncFun(function, wt, withExecutor = true))
+                    val wt = function.resolveAsyncWrapperType()
+                    if (wt == "STREAM") {
+                        classBuilder.addFunction(generateKotlinStreamFun(function))
+                    } else {
+                        classBuilder.addFunction(generateKotlinAsyncFun(function, wt, withExecutor = false))
+                        classBuilder.addFunction(generateKotlinAsyncFun(function, wt, withExecutor = true))
+                    }
                 }
 
                 blockingAnno != null -> classBuilder.addFunction(generateKotlinBlockingFun(function))
@@ -137,12 +144,57 @@ internal object KotlinClassGenerator : KotlinGenerator {
                 .addImport("kotlinx.coroutines", "asCoroutineDispatcher")
                 .addImport("kotlinx.coroutines", "runBlocking")
         }
-        if (hasBlockingMethods && !hasAsyncMethods) {
+        if ((hasBlockingMethods || hasStreamMethods) && !hasAsyncMethods) {
             fileBuilder.addImport("kotlinx.coroutines", "runBlocking")
+        }
+        if (hasStreamMethods) {
+            fileBuilder.addImport("kotlinx.coroutines.flow", "toList")
         }
 
         return fileBuilder
             .addType(classBuilder.build())
+    }
+
+    /**
+     * Generates a blocking `Stream<T>` function for a function annotated with
+     * `@AsyncJavaApi(wrapperType = STREAM)` that returns `Flow<T>`.
+     *
+     * Works for both `suspend` and non-`suspend` functions: inside `runBlocking`,
+     * the delegate call is valid regardless of whether it is suspend.
+     */
+    private fun generateKotlinStreamFun(function: KSFunctionDeclaration): FunSpec {
+        val methodName = function.simpleName.asString()
+
+        val flowType = function.returnType?.resolve()
+        val elementTypeRef = flowType?.arguments?.firstOrNull()?.type
+        val elementTypeName = elementTypeRef?.toTypeName()
+            ?: error("Cannot resolve Flow element type for function $methodName")
+
+        val returnType = STREAM.parameterizedBy(elementTypeName)
+
+        val paramNames = mutableListOf<String>()
+        val funBuilder = FunSpec.builder(methodName)
+            .addModifiers(KModifier.PUBLIC)
+            .addAnnotation(
+                AnnotationSpec.builder(ClassName("kotlin.jvm", "Throws"))
+                    .addMember("%T::class", InterruptedException::class)
+                    .build(),
+            )
+            .returns(returnType)
+
+        for (param in function.parameters) {
+            val name = param.name?.getShortName() ?: "arg"
+            funBuilder.addParameter(name, param.type.toTypeName())
+            paramNames.add(name)
+        }
+
+        val callArgs = paramNames.joinToString(", ")
+        funBuilder.addStatement(
+            "return runBlocking { delegate.%N(%L).%M() }.stream()",
+            methodName, callArgs, FLOW_TO_LIST,
+        )
+
+        return funBuilder.build()
     }
 
     private fun generateKotlinBlockingFun(function: KSFunctionDeclaration): FunSpec {

@@ -387,7 +387,7 @@ internal object JavaClassGenerator : JavaGenerator {
                         )
                     )
                 }
-                    ?: WildcardTypeName.subtypeOf(OBJECT)
+                    ?: OBJECT
 
                 else -> arg.type?.let { resolveTypeName(it, boxed = true) } ?: OBJECT
             }

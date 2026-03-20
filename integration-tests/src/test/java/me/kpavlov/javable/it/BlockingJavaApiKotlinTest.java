@@ -25,7 +25,9 @@ public class BlockingJavaApiKotlinTest {
     }
 
     @Test
-    void blockingMethod_returnsOnCallingThread() {
+    void blockingMethod_completesBeforeReturn() {
+        // The blocking method must complete synchronously (no future, no callback).
+        // If it were async the assertion here would not be reached before completion.
         int result = subject.multiply(4, 5);
         assertEquals(20, result);
     }

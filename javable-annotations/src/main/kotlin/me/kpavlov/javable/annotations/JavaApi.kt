@@ -55,6 +55,7 @@ public enum class JavaWrapperType {
  *                      Defaults to `false`.
  */
 @Retention(AnnotationRetention.SOURCE)
+@Target(AnnotationTarget.CLASS)
 @MustBeDocumented
 public annotation class JavaApi(
     val kotlinWrapper: Boolean = true,
@@ -113,6 +114,9 @@ public annotation class AsyncJavaApi(val wrapperType: JavaWrapperType = JavaWrap
  *
  * Use this annotation when the caller is already on a thread that is safe to block
  * (e.g. a dedicated worker thread or a virtual thread on Java 21+).
+ *
+ * **If both [AsyncJavaApi] and [BlockingJavaApi] are present on the same function,
+ * [AsyncJavaApi] takes precedence and [BlockingJavaApi] is silently ignored.**
  *
  * **The generated Java method declares `throws InterruptedException`.**
  *

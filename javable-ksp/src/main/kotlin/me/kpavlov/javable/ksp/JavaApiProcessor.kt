@@ -74,7 +74,7 @@ internal class JavaApiProcessor(
     ) {
         try {
             val qualifiedName = classDeclaration.qualifiedName?.asString()
-            logger.warn("🪛 Processing $qualifiedName...")
+            logger.info("🪛 Processing $qualifiedName...")
 
             val javaApiAnnotation = classDeclaration.getAnnotationsByType(JavaApi::class).single()
 
@@ -98,7 +98,7 @@ internal class JavaApiProcessor(
         } catch (e: Exception) {
             unprocessable.add(classDeclaration)
             logger.error(
-                "Failed to generate schema extension " +
+                "Failed to generate Java/Kotlin wrapper " +
                         "for ${classDeclaration.qualifiedName?.asString()}: ${e.message}",
             )
         }
@@ -110,6 +110,8 @@ internal class JavaApiProcessor(
         classDeclaration: KSClassDeclaration,
         packageName: String
     ) {
+        val containingFile = classDeclaration.containingFile
+            ?: error("Cannot determine containing file for ${classDeclaration.qualifiedName?.asString()}")
         val kotlinClassName = "${simpleName}Kotlin"
         val kotlinFile = generator.generateWrapper(
             kotlinClassDeclaration = classDeclaration,
@@ -118,7 +120,7 @@ internal class JavaApiProcessor(
         ).build()
 
         codeGenerator.createNewFile(
-            Dependencies(aggregating = false, classDeclaration.containingFile!!),
+            Dependencies(aggregating = false, containingFile),
             packageName = packageName,
             fileName = kotlinClassName,
             extensionName = "kt",
@@ -132,6 +134,8 @@ internal class JavaApiProcessor(
         packageName: String,
         autoCloseable: Boolean = false,
     ) {
+        val containingFile = classDeclaration.containingFile
+            ?: error("Cannot determine containing file for ${classDeclaration.qualifiedName?.asString()}")
         val javaClassName = "${simpleName}Java"
         val javaFile = generator.generateJavaClass(
             kotlinClassDeclaration = classDeclaration,
@@ -141,7 +145,7 @@ internal class JavaApiProcessor(
         ).build()
 
         codeGenerator.createNewFile(
-            Dependencies(aggregating = false, classDeclaration.containingFile!!),
+            Dependencies(aggregating = false, containingFile),
             packageName = packageName,
             fileName = javaClassName,
             extensionName = "java",

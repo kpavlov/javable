@@ -1,5 +1,6 @@
 package me.kpavlov.javable.it;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import java.util.concurrent.CompletableFuture;
@@ -16,6 +17,12 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 public class AutoCloseableJavaTest {
 
     private final Calculator delegate = new Calculator();
+    private java.util.concurrent.ExecutorService executor;
+
+    @AfterEach
+    void shutdownExecutor() {
+        if (executor != null) executor.shutdownNow();
+    }
 
     @Test
     void javaWrapper_implementsAutoCloseable() {
@@ -38,8 +45,9 @@ public class AutoCloseableJavaTest {
 
     @Test
     void tryWithResources_withExecutorConstructor_futureCompletesBeforeClose() throws Exception {
+        executor = java.util.concurrent.Executors.newSingleThreadExecutor();
         int result;
-        try (var wrapper = new CalculatorJava(delegate, java.util.concurrent.Executors.newSingleThreadExecutor())) {
+        try (var wrapper = new CalculatorJava(delegate, executor)) {
             result = wrapper.add(4, 5).get(5, TimeUnit.SECONDS);
         }
         assertEquals(9, result);

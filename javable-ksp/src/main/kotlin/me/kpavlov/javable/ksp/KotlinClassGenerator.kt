@@ -64,7 +64,15 @@ internal object KotlinClassGenerator : KotlinGenerator {
                 )
                 .build()
         } else {
-            FunSpec.constructorBuilder()
+            val constructorBuilder = FunSpec.constructorBuilder()
+            if (kotlinClassDeclaration.isPublic()) {
+                constructorBuilder.addModifiers(KModifier.PUBLIC)
+            } else if (kotlinClassDeclaration.isInternal()) {
+                constructorBuilder.addModifiers(KModifier.INTERNAL)
+            } else if (kotlinClassDeclaration.isProtected()) {
+                constructorBuilder.addModifiers(KModifier.PROTECTED)
+            }
+            constructorBuilder
                 .addParameter(ParameterSpec.builder("delegate", delegateClassName).build())
                 .build()
         }
@@ -139,7 +147,8 @@ internal object KotlinClassGenerator : KotlinGenerator {
 
     private fun generateKotlinBlockingFun(function: KSFunctionDeclaration): FunSpec {
         val methodName = function.simpleName.asString()
-        val returnType = function.returnType!!.toTypeName()
+        val returnType = function.returnType?.toTypeName()
+            ?: error("Function $methodName has no return type")
         val isUnit = function.returnType?.resolve()?.declaration?.qualifiedName?.asString() == "kotlin.Unit"
 
         val paramNames = mutableListOf<String>()
@@ -165,7 +174,8 @@ internal object KotlinClassGenerator : KotlinGenerator {
 
     private fun generateKotlinRegularFun(function: KSFunctionDeclaration): FunSpec {
         val methodName = function.simpleName.asString()
-        val returnType = function.returnType!!.toTypeName()
+        val returnType = function.returnType?.toTypeName()
+            ?: error("Function $methodName has no return type")
         val isUnit = function.returnType?.resolve()?.declaration?.qualifiedName?.asString() == "kotlin.Unit"
 
         val paramNames = mutableListOf<String>()
@@ -195,7 +205,8 @@ internal object KotlinClassGenerator : KotlinGenerator {
         withExecutor: Boolean,
     ): FunSpec {
         val methodName = function.simpleName.asString()
-        val returnType = function.returnType!!.toTypeName()
+        val returnType = function.returnType?.toTypeName()
+            ?: error("Function $methodName has no return type")
         val futureClass = if (wrapperType == "COMPLETION_STAGE") COMPLETION_STAGE else COMPLETABLE_FUTURE
         val returnFuture = futureClass.parameterizedBy(returnType)
 

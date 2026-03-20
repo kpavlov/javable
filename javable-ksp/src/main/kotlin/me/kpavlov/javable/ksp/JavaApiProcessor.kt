@@ -60,7 +60,7 @@ internal class JavaApiProcessor(
                 return@forEach
             }
 
-            processClassDeclaration(classDeclaration, unprocessable)
+            processClassDeclaration(classDeclaration)
         }
 
         return unprocessable
@@ -68,20 +68,18 @@ internal class JavaApiProcessor(
 
     @OptIn(KspExperimental::class)
     @Suppress("TooGenericExceptionCaught")
-    private fun processClassDeclaration(
-        classDeclaration: KSClassDeclaration,
-        unprocessable: MutableList<KSAnnotated>,
-    ) {
-        try {
-            val qualifiedName = classDeclaration.qualifiedName?.asString()
-            logger.info("🪛 Processing $qualifiedName...")
+    private fun processClassDeclaration(classDeclaration: KSClassDeclaration) {
+        val qualifiedName = classDeclaration.qualifiedName?.asString()
+        logger.info("🪛 Processing $qualifiedName...")
 
-            val javaApiAnnotation = classDeclaration.getAnnotationsByType(JavaApi::class).single()
+        val javaApiAnnotation = classDeclaration.getAnnotationsByType(JavaApi::class).singleOrNull()
+            ?: error("Expected exactly one @JavaApi annotation on $qualifiedName")
 
-            val simpleName = classDeclaration.simpleName.asString()
-            val packageName = classDeclaration.packageName.asString()
+        val simpleName = classDeclaration.simpleName.asString()
+        val packageName = classDeclaration.packageName.asString()
 
-            if (javaApiAnnotation.javaWrapper) {
+        if (javaApiAnnotation.javaWrapper) {
+            try {
                 generateJavaFile(
                     JavaClassGenerator,
                     simpleName,
@@ -89,18 +87,17 @@ internal class JavaApiProcessor(
                     packageName,
                     autoCloseable = javaApiAnnotation.autoCloseable,
                 )
+            } catch (e: Exception) {
+                logger.error("Failed to generate Java wrapper for $qualifiedName: ${e.message}")
             }
+        }
 
-            if (javaApiAnnotation.kotlinWrapper) {
-                val generator = KotlinClassGenerator
-                generateKotlinFile(generator, simpleName, classDeclaration, packageName)
+        if (javaApiAnnotation.kotlinWrapper) {
+            try {
+                generateKotlinFile(KotlinClassGenerator, simpleName, classDeclaration, packageName)
+            } catch (e: Exception) {
+                logger.error("Failed to generate Kotlin wrapper for $qualifiedName: ${e.message}")
             }
-        } catch (e: Exception) {
-            unprocessable.add(classDeclaration)
-            logger.error(
-                "Failed to generate Java/Kotlin wrapper " +
-                        "for ${classDeclaration.qualifiedName?.asString()}: ${e.message}",
-            )
         }
     }
 

@@ -150,6 +150,9 @@ internal object JavaClassGenerator : JavaGenerator {
                     ).addStatement(
                         $$"$T.currentThread().interrupt()",
                         ClassName.get("java.lang", "Thread"),
+                    ).addStatement(
+                        $$"throw new $T(\"Close interrupted\", e)",
+                        RUNTIME_EXCEPTION,
                     ).nextControlFlow($$"catch ($T e)", EXECUTION_EXCEPTION)
                     .addStatement($$"$T cause = e.getCause()", THROWABLE)
                     .beginControlFlow($$"if (cause instanceof $T)", RUNTIME_EXCEPTION)

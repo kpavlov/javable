@@ -17,7 +17,7 @@ clean:
 build:
 	./gradlew build
 
-# Format the code
+# Generate API documentation
 .PHONY: apidocs
 apidocs:
 	./gradlew dokkaGenerateHtml

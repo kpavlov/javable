@@ -2,6 +2,7 @@ package me.kpavlov.javable.ksp
 
 import com.google.devtools.ksp.isConstructor
 import com.google.devtools.ksp.isPrivate
+import com.google.devtools.ksp.isProtected
 import com.google.devtools.ksp.symbol.KSAnnotation
 import com.google.devtools.ksp.symbol.KSClassDeclaration
 import com.google.devtools.ksp.symbol.KSFunctionDeclaration
@@ -17,6 +18,7 @@ internal fun KSClassDeclaration.getWrapperFunctions(): List<KSFunctionDeclaratio
         .filterNot { it.isConstructor() }
         .filterNot { it.simpleName.asString() in listOf("equals", "hashCode", "toString") }
         .filterNot { it.isPrivate() }
+        .filterNot { it.isProtected() }
         .toList()
 
 /** Finds the first annotation on this function with the given [shortName], or null. */

@@ -8,7 +8,8 @@ The same problem exists for Kotlin `Flow<T>`: Java has no native way to consume 
 
 **javable** eliminates that boilerplate. Annotate your Kotlin class once and KSP generates a ready-to-use Java wrapper (
 and optionally a Kotlin one) with the right signatures, scope lifecycle, and resource cleanup. Async functions become
-`CompletableFuture`; flows become `java.util.stream.Stream`; blocking wrappers are plain method calls.
+`CompletableFuture`; flows become `java.util.stream.Stream` or reactive `Publisher`; blocking wrappers are plain method
+calls.
 
 ---
 
@@ -28,6 +29,9 @@ dependencies {
     // coroutines runtime — required in the consuming module
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk9:1.10.2")
+
+    // For @AsyncJavaApi(wrapperType = PUBLISHER) — reactive Publisher support
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-reactor:1.10.2")
 }
 ```
 
@@ -225,8 +229,71 @@ List<Integer> first4 = subject.numbers(4).collect(Collectors.toList());
 Because no coroutine scope is needed — the flow is collected synchronously — the generated wrapper does **not**
 implement `AutoCloseable` and has no scope field.
 
-> **Note:** `STREAM` collects all flow elements into memory before returning the `Stream`. For very large or infinite
-> flows, a reactive adapter (`Flux`, `Publisher`) is a better fit and is planned for a future release.
+> **Note:** `STREAM` collects all flow elements into memory before returning the `Stream`. For large or infinite
+> flows, use [`PUBLISHER`](#expose-a-kotlin-flow-as-a-reactive-publisher) instead — it preserves lazy, back-pressured
+> streaming.
+
+---
+
+### Expose a Kotlin `Flow` as a reactive `Publisher`
+
+`STREAM` materializes the entire flow before returning. When you need lazy, back-pressured delivery — streaming results
+to Java as they arrive — use `PUBLISHER` instead. The generated wrapper returns `org.reactivestreams.Publisher<T>`,
+which Project Reactor, RxJava, and Spring WebFlux all consume natively.
+
+```kotlin
+@JavaApi(javaWrapper = true, kotlinWrapper = true)
+class ChatService {
+
+    @AsyncJavaApi(wrapperType = JavaWrapperType.PUBLISHER)
+    fun streamTokens(prompt: String): Flow<String> = flow {
+        emit("Hello")
+        delay(100)
+        emit(" world")
+    }
+
+    @AsyncJavaApi(wrapperType = JavaWrapperType.PUBLISHER)
+    suspend fun singleAnswer(prompt: String): String {
+        delay(100)
+        return "42"
+    }
+}
+```
+
+Generated Java signatures:
+
+```java
+Publisher<String> streamTokens(String prompt);     // Flow → Publisher via asPublisher()
+Publisher<String> singleAnswer(String prompt);      // suspend → Publisher via mono {}
+```
+
+Use it from Java:
+
+```java
+var chat = new ChatServiceJava(new ChatService());
+
+// Reactive subscription — elements arrive lazily
+chat.streamTokens("Hi").subscribe(new Subscriber<>() {
+    public void onSubscribe(Subscription s) { s.request(Long.MAX_VALUE); }
+    public void onNext(String token)        { System.out.print(token); }
+    public void onError(Throwable t)        { t.printStackTrace(); }
+    public void onComplete()                { System.out.println(" [done]"); }
+});
+
+// Single-value suspend → Publisher with one element
+chat.singleAnswer("What is the meaning of life?")
+    .subscribe(/* ... */);
+```
+
+**How it works:**
+
+- **Flow-returning functions** use `Flow.asPublisher()` from `kotlinx-coroutines-reactive`. The `Publisher` is cold —
+  elements are emitted on subscription with back-pressure support.
+- **Single-value suspend functions** use `mono {}` from `kotlinx-coroutines-reactor`. `Mono<T>` implements
+  `Publisher<T>`, so it satisfies the return type while providing a single-element reactive stream.
+- No `CoroutineScope` is created. No `AutoCloseable`. The wrapper class has a simple delegate-only constructor.
+
+> **Dependency:** `PUBLISHER` requires `org.jetbrains.kotlinx:kotlinx-coroutines-reactor` on the runtime classpath.
 
 ---
 
@@ -307,17 +374,22 @@ suspend fun search(query: String): String
 
 @AsyncJavaApi(wrapperType = JavaWrapperType.STREAM)
 fun askAgent(prompt: String): Flow<String>
+
+@AsyncJavaApi(wrapperType = JavaWrapperType.PUBLISHER)
+fun streamResults(query: String): Flow<String>
 ```
 
-| `wrapperType`                    | Applies to                                 | Generated return type          |
-|----------------------------------|--------------------------------------------|--------------------------------|
-| `COMPLETABLE_FUTURE` _(default)_ | `suspend` functions                        | `CompletableFuture<T>`         |
-| `COMPLETION_STAGE`               | `suspend` functions                        | `CompletionStage<T>`           |
-| `STREAM`                         | `fun` or `suspend fun` returning `Flow<T>` | `Stream<T>` (blocking collect) |
+| `wrapperType`                    | Applies to                                               | Generated return type          |
+|----------------------------------|----------------------------------------------------------|--------------------------------|
+| `COMPLETABLE_FUTURE` _(default)_ | `suspend` functions                                      | `CompletableFuture<T>`         |
+| `COMPLETION_STAGE`               | `suspend` functions                                      | `CompletionStage<T>`           |
+| `STREAM`                         | `fun` or `suspend fun` returning `Flow<T>`               | `Stream<T>` (blocking collect) |
+| `PUBLISHER`                      | `fun`/`suspend fun` returning `Flow<T>`, or `suspend fun` returning `T` | `Publisher<T>` (reactive)      |
 
 For `COMPLETABLE_FUTURE` and `COMPLETION_STAGE`, two overloads are always generated: one using the wrapper's built-in
 scope, one accepting a caller-supplied `Executor`. For `STREAM`, a single blocking method is generated — no scope, no
-executor overload.
+executor overload. For `PUBLISHER`, Flow-returning functions use `asPublisher()` (fully reactive, no scope);
+single-value suspend functions use `mono {}` from `kotlinx-coroutines-reactor` (`Mono<T>` implements `Publisher<T>`).
 
 ### `@BlockingJavaApi` — function level
 
@@ -333,13 +405,13 @@ calling thread. The generated method declares `throws InterruptedException`.
 The generated wrappers manage a `CoroutineScope` backed by a `SupervisorJob`. Here's when a scope is created and when
 `AutoCloseable` is implemented:
 
-| Wrapper type | Condition                                                                            | Scope? | `AutoCloseable`? |
-|--------------|--------------------------------------------------------------------------------------|--------|------------------|
-| Java         | `autoCloseable = true`                                                               | yes    | yes              |
-| Java         | `autoCloseable = false` + has `@AsyncJavaApi` (Future/Stage) methods                 | yes    | no               |
-| Java         | `autoCloseable = false` + only `@AsyncJavaApi(STREAM)` or `@BlockingJavaApi` methods | no     | no               |
-| Kotlin       | has `@AsyncJavaApi` (Future/Stage) methods                                           | yes    | yes              |
-| Kotlin       | only `@AsyncJavaApi(STREAM)` or `@BlockingJavaApi` methods                           | no     | no               |
+| Wrapper type | Condition                                                                                          | Scope? | `AutoCloseable`? |
+|--------------|----------------------------------------------------------------------------------------------------|--------|------------------|
+| Java         | `autoCloseable = true`                                                                             | yes    | yes              |
+| Java         | `autoCloseable = false` + has `@AsyncJavaApi` (Future/Stage) methods                               | yes    | no               |
+| Java         | `autoCloseable = false` + only `@AsyncJavaApi(STREAM)`, `@AsyncJavaApi(PUBLISHER)`, or `@BlockingJavaApi` methods | no     | no               |
+| Kotlin       | has `@AsyncJavaApi` (Future/Stage) methods                                                         | yes    | yes              |
+| Kotlin       | only `@AsyncJavaApi(STREAM)`, `@AsyncJavaApi(PUBLISHER)`, or `@BlockingJavaApi` methods            | no     | no               |
 
 The **Kotlin wrapper's** `close()` cancels the scope and waits for all child coroutines to finish:
 
@@ -387,7 +459,7 @@ public void close() {
 |-----------------------|----------------------------------------------------------------------------------------------|
 | `javable-annotations` | `@JavaApi`, `@AsyncJavaApi`, `@BlockingJavaApi`, `JavaWrapperType`                           |
 | `javable-ksp`         | KSP processor + JavaPoet/KotlinPoet code generators                                          |
-| `integration-tests`   | End-to-end examples (`Calculator`, `UserRepository`, `BlockingOnlySubject`, `StreamSubject`) |
+| `integration-tests`   | End-to-end examples (`Calculator`, `UserRepository`, `BlockingOnlySubject`, `StreamSubject`, `PublisherSubject`) |
 
 ---
 

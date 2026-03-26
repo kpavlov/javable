@@ -29,9 +29,28 @@ public enum class JavaWrapperType {
      * Java Stream for callers that cannot consume coroutines or reactive streams directly.
      *
      * Note: this collects all elements into memory before returning the `Stream`. For very large
-     * or infinite flows, prefer a reactive adapter (`Flux`, `Publisher`) in the future.
+     * or infinite flows, prefer [PUBLISHER] instead.
      */
     STREAM,
+
+    /**
+     * The generated method returns `org.reactivestreams.Publisher<T>`.
+     *
+     * Two usage patterns are supported:
+     *
+     * 1. **Flow return** — the annotated function returns `kotlinx.coroutines.flow.Flow<T>`
+     *    (suspend or non-suspend). The generated wrapper converts the Flow to a `Publisher`
+     *    using `Flow.asPublisher()` from `kotlinx-coroutines-reactive`. The resulting Publisher
+     *    is cold and fully reactive — elements are emitted lazily on subscription.
+     *
+     * 2. **Single-value suspend** — the annotated `suspend` function returns a scalar `T`.
+     *    The generated wrapper emits a single element via the `publish` coroutine builder and
+     *    completes. This requires a `CoroutineScope` (the wrapper will implement `AutoCloseable`).
+     *
+     * Requires `org.jetbrains.kotlinx:kotlinx-coroutines-reactor` on the runtime classpath
+     * (which transitively provides `kotlinx-coroutines-reactive` for `asPublisher()`).
+     */
+    PUBLISHER,
 }
 
 /**

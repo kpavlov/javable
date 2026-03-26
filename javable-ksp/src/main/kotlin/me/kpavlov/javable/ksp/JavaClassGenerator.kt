@@ -45,6 +45,9 @@ internal object JavaClassGenerator : JavaGenerator {
     private val STREAM = ClassName.get("java.util.stream", "Stream")
     private val LIST = ClassName.get("java.util", "List")
     private val ARRAY_LIST = ClassName.get("java.util", "ArrayList")
+    private val PUBLISHER = ClassName.get("org.reactivestreams", "Publisher")
+    private val REACTIVE_FLOW_KT = ClassName.get("kotlinx.coroutines.reactive", "ReactiveFlowKt")
+    private val MONO_KT = ClassName.get("kotlinx.coroutines.reactor", "MonoKt")
 
     override fun generateJavaClass(
         packageName: String,
@@ -177,11 +180,13 @@ internal object JavaClassGenerator : JavaGenerator {
             when {
                 asyncAnno != null -> {
                     val wt = function.resolveAsyncWrapperType()
-                    if (wt == "STREAM") {
-                        classBuilder.addMethod(generateStreamMethod(function))
-                    } else {
-                        classBuilder.addMethod(generateAsyncMethod(function, wt, withExecutor = false))
-                        classBuilder.addMethod(generateAsyncMethod(function, wt, withExecutor = true))
+                    when (wt) {
+                        "STREAM" -> classBuilder.addMethod(generateStreamMethod(function))
+                        "PUBLISHER" -> classBuilder.addMethod(generatePublisherMethod(function))
+                        else -> {
+                            classBuilder.addMethod(generateAsyncMethod(function, wt, withExecutor = false))
+                            classBuilder.addMethod(generateAsyncMethod(function, wt, withExecutor = true))
+                        }
                     }
                 }
 
@@ -237,6 +242,90 @@ internal object JavaClassGenerator : JavaGenerator {
         builder.addStatement(
             $$"return (($T) $T.runBlocking($T.INSTANCE, (s, continuation) -> $T.toList(flow, new $T<>(), continuation))).stream()",
             listTypeName, BUILDERS_KT, EMPTY_COROUTINE_CONTEXT, FLOW_KT, ARRAY_LIST,
+        )
+
+        return builder.build()
+    }
+
+    /**
+     * Generates a `Publisher<T>` method for a function annotated with
+     * `@AsyncJavaApi(wrapperType = PUBLISHER)`.
+     *
+     * - Flow return (non-suspend): `ReactiveFlowKt.asPublisher(delegate.method(), context)`.
+     * - Flow return (suspend): `runBlocking` to obtain the Flow, then `asPublisher`.
+     * - Single-value suspend: `MonoKt.mono(context, block)` — Mono implements Publisher.
+     */
+    private fun generatePublisherMethod(function: KSFunctionDeclaration): MethodSpec {
+        val methodName = function.simpleName.asString()
+        val isSuspend = function.modifiers.contains(Modifier.SUSPEND)
+        val returnQualified = function.returnType?.resolve()?.declaration?.qualifiedName?.asString()
+        val isFlowReturn = returnQualified == "kotlinx.coroutines.flow.Flow"
+
+        if (isFlowReturn) {
+            return generateFlowPublisherMethod(function, methodName, isSuspend)
+        }
+        return generateSingleValuePublisherMethod(function, methodName)
+    }
+
+    private fun generateFlowPublisherMethod(
+        function: KSFunctionDeclaration,
+        methodName: String,
+        isSuspend: Boolean,
+    ): MethodSpec {
+        val flowType = function.returnType?.resolve()
+        val elementTypeRef = flowType?.arguments?.firstOrNull()?.type
+        val elementType = resolveTypeName(elementTypeRef, boxed = true)
+        val publisherTypeName = ParameterizedTypeName.get(PUBLISHER, elementType)
+
+        val builder = MethodSpec
+            .methodBuilder(methodName)
+            .addModifiers(JavaModifier.PUBLIC)
+            .returns(publisherTypeName)
+
+        val paramNames = addParameters(builder, function)
+        val callArgs = paramNames.joinToString(", ")
+
+        if (isSuspend) {
+            val flowTypeName = ParameterizedTypeName.get(FLOW, elementType)
+            val callArgsWithCont = (paramNames + "continuation").joinToString(", ")
+            builder
+                .addException(ClassName.get("java.lang", "InterruptedException"))
+                .addStatement(
+                    $$"$T flow = ($T) $T.runBlocking($T.INSTANCE, (s, continuation) -> delegate.$$methodName($$callArgsWithCont))",
+                    flowTypeName, flowTypeName, BUILDERS_KT, EMPTY_COROUTINE_CONTEXT,
+                )
+                .addStatement(
+                    $$"return $T.asPublisher(flow, $T.INSTANCE)",
+                    REACTIVE_FLOW_KT, EMPTY_COROUTINE_CONTEXT,
+                )
+        } else {
+            builder.addStatement(
+                $$"return $T.asPublisher(delegate.$$methodName($$callArgs), $T.INSTANCE)",
+                REACTIVE_FLOW_KT, EMPTY_COROUTINE_CONTEXT,
+            )
+        }
+
+        return builder.build()
+    }
+
+    private fun generateSingleValuePublisherMethod(
+        function: KSFunctionDeclaration,
+        methodName: String,
+    ): MethodSpec {
+        val rawReturn = resolveTypeName(function.returnType, boxed = true)
+        val publisherTypeName = ParameterizedTypeName.get(PUBLISHER, rawReturn)
+
+        val builder = MethodSpec
+            .methodBuilder(methodName)
+            .addModifiers(JavaModifier.PUBLIC)
+            .returns(publisherTypeName)
+
+        val paramNames = addParameters(builder, function)
+        val callArgsWithCont = (paramNames + "continuation").joinToString(", ")
+
+        builder.addStatement(
+            $$"return $T.mono($T.INSTANCE, (s, continuation) -> delegate.$$methodName($$callArgsWithCont))",
+            MONO_KT, EMPTY_COROUTINE_CONTEXT,
         )
 
         return builder.build()

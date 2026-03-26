@@ -28,6 +28,11 @@ internal object KotlinClassGenerator : KotlinGenerator {
     private val SUPERVISOR_JOB = MemberName("kotlinx.coroutines", "SupervisorJob")
     private val STREAM = ClassName("java.util.stream", "Stream")
     private val FLOW_TO_LIST = MemberName("kotlinx.coroutines.flow", "toList")
+    private val PUBLISHER = ClassName("org.reactivestreams", "Publisher")
+    private val AS_PUBLISHER = MemberName("kotlinx.coroutines.reactive", "asPublisher")
+    private val MONO = MemberName("kotlinx.coroutines.reactor", "mono")
+    private val FLOW_BUILDER = MemberName("kotlinx.coroutines.flow", "flow")
+    private val EMIT_ALL = MemberName("kotlinx.coroutines.flow", "emitAll")
 
     override fun generateWrapper(
         packageName: String,
@@ -41,8 +46,11 @@ internal object KotlinClassGenerator : KotlinGenerator {
         val hasAsyncMethods = functions.hasFutureAnnotation()
         val hasBlockingMethods = functions.hasAnnotation(BLOCKING_JAVA_API)
         val hasStreamMethods = functions.hasStreamAnnotation()
+        val hasPublisherMethods = functions.hasPublisherAnnotation()
 
-        val constructor = if (hasAsyncMethods) {
+        val needsScope = hasAsyncMethods
+
+        val constructor = if (needsScope) {
             val constructorBuilder = FunSpec.constructorBuilder()
             if (kotlinClassDeclaration.isPublic()) {
                 constructorBuilder.addModifiers(KModifier.PUBLIC)
@@ -89,7 +97,7 @@ internal object KotlinClassGenerator : KotlinGenerator {
                     .build(),
             )
 
-        if (hasAsyncMethods) {
+        if (needsScope) {
             classBuilder
                 .addSuperinterface(ClassName("java.lang", "AutoCloseable"))
                 .addProperty(
@@ -105,11 +113,13 @@ internal object KotlinClassGenerator : KotlinGenerator {
             when {
                 asyncAnno != null -> {
                     val wt = function.resolveAsyncWrapperType()
-                    if (wt == "STREAM") {
-                        classBuilder.addFunction(generateKotlinStreamFun(function))
-                    } else {
-                        classBuilder.addFunction(generateKotlinAsyncFun(function, wt, withExecutor = false))
-                        classBuilder.addFunction(generateKotlinAsyncFun(function, wt, withExecutor = true))
+                    when (wt) {
+                        "STREAM" -> classBuilder.addFunction(generateKotlinStreamFun(function))
+                        "PUBLISHER" -> classBuilder.addFunction(generateKotlinPublisherFun(function))
+                        else -> {
+                            classBuilder.addFunction(generateKotlinAsyncFun(function, wt, withExecutor = false))
+                            classBuilder.addFunction(generateKotlinAsyncFun(function, wt, withExecutor = true))
+                        }
                     }
                 }
 
@@ -123,7 +133,7 @@ internal object KotlinClassGenerator : KotlinGenerator {
             }
         }
 
-        if (hasAsyncMethods) {
+        if (needsScope) {
             val job = ClassName("kotlinx.coroutines", "Job")
             classBuilder.addFunction(
                 FunSpec.builder("close")
@@ -140,15 +150,22 @@ internal object KotlinClassGenerator : KotlinGenerator {
         if (hasAsyncMethods) {
             fileBuilder
                 .addImport("kotlinx.coroutines.future", "future")
-                .addImport("kotlinx.coroutines", "cancel")
                 .addImport("kotlinx.coroutines", "asCoroutineDispatcher")
+        }
+        if (needsScope) {
+            fileBuilder
+                .addImport("kotlinx.coroutines", "cancel")
                 .addImport("kotlinx.coroutines", "runBlocking")
         }
-        if ((hasBlockingMethods || hasStreamMethods) && !hasAsyncMethods) {
+        if ((hasBlockingMethods || hasStreamMethods) && !needsScope) {
             fileBuilder.addImport("kotlinx.coroutines", "runBlocking")
         }
         if (hasStreamMethods) {
             fileBuilder.addImport("kotlinx.coroutines.flow", "toList")
+        }
+        if (hasPublisherMethods) {
+            fileBuilder.addImport("kotlinx.coroutines.reactive", "asPublisher")
+            fileBuilder.addImport("kotlinx.coroutines.reactor", "mono")
         }
 
         return fileBuilder
@@ -193,6 +210,65 @@ internal object KotlinClassGenerator : KotlinGenerator {
             "return runBlocking { delegate.%N(%L).%M() }.stream()",
             methodName, callArgs, FLOW_TO_LIST,
         )
+
+        return funBuilder.build()
+    }
+
+    /**
+     * Generates a `Publisher<T>` function for `@AsyncJavaApi(wrapperType = PUBLISHER)`.
+     *
+     * - Flow return (non-suspend): `delegate.method().asPublisher()`
+     * - Flow return (suspend): `flow { emitAll(delegate.method()) }.asPublisher()`
+     * - Single-value suspend: `mono { delegate.method() }` (Mono implements Publisher)
+     */
+    private fun generateKotlinPublisherFun(function: KSFunctionDeclaration): FunSpec {
+        val methodName = function.simpleName.asString()
+        val isSuspend = function.modifiers.contains(Modifier.SUSPEND)
+        val returnQualified = function.returnType?.resolve()?.declaration?.qualifiedName?.asString()
+        val isFlowReturn = returnQualified == "kotlinx.coroutines.flow.Flow"
+
+        val paramNames = mutableListOf<String>()
+        val funBuilder = FunSpec.builder(methodName)
+            .addModifiers(KModifier.PUBLIC)
+
+        for (param in function.parameters) {
+            val name = param.name?.getShortName() ?: "arg"
+            funBuilder.addParameter(name, param.type.toTypeName())
+            paramNames.add(name)
+        }
+
+        val callArgs = paramNames.joinToString(", ")
+
+        if (isFlowReturn) {
+            val flowType = function.returnType?.resolve()
+            val elementTypeRef = flowType?.arguments?.firstOrNull()?.type
+            val elementTypeName = elementTypeRef?.toTypeName()
+                ?: error("Cannot resolve Flow element type for function $methodName")
+            val returnType = PUBLISHER.parameterizedBy(elementTypeName)
+            funBuilder.returns(returnType)
+
+            if (isSuspend) {
+                funBuilder.addStatement(
+                    "return %M { %M(delegate.%N(%L)) }.%M()",
+                    FLOW_BUILDER, EMIT_ALL, methodName, callArgs, AS_PUBLISHER,
+                )
+            } else {
+                funBuilder.addStatement(
+                    "return delegate.%N(%L).%M()",
+                    methodName, callArgs, AS_PUBLISHER,
+                )
+            }
+        } else {
+            // Single-value suspend — use mono { delegate.method() } (Mono implements Publisher)
+            val rawReturnType = function.returnType?.toTypeName()
+                ?: error("Function $methodName has no return type")
+            val returnType = PUBLISHER.parameterizedBy(rawReturnType)
+            funBuilder.returns(returnType)
+            funBuilder.addStatement(
+                "return %M { delegate.%N(%L) }",
+                MONO, methodName, callArgs,
+            )
+        }
 
         return funBuilder.build()
     }

@@ -87,6 +87,7 @@ internal class JavaApiProcessor(
                     packageName,
                     autoCloseable = javaApiAnnotation.autoCloseable,
                 )
+
             } catch (e: Exception) {
                 logger.error("Failed to generate Java wrapper for $qualifiedName: ${e.message}")
             }

@@ -10,6 +10,7 @@ kotlin {
         api(project(":javable-annotations"))
         implementation(libs.kotlinx.coroutines.core)
         implementation(libs.kotlinx.coroutines.jdk9)
+        implementation(libs.kotlinx.coroutines.reactor)
         testImplementation(kotlin("test-junit5"))
 
         add("ksp", project(":javable-ksp"))

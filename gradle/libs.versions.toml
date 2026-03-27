@@ -10,7 +10,7 @@ kotlinxSerializationJSON = "1.10.0"
 kotlinxCoroutines = "1.10.2"
 ksp = "2.3.6"
 javaPoet = "0.12.0"
-kotlinPoet = "2.2.0"
+kotlinPoet = "2.3.0"
 junit = "6.0.3"
 
 [libraries]

@@ -11,7 +11,7 @@ kotlinxCoroutines = "1.10.2"
 ksp = "2.3.8"
 javaPoet = "0.14.0"
 kotlinPoet = "2.3.0"
-junit = "6.0.3"
+junit = "6.1.0"
 
 [libraries]
 kotlinGradlePlugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }

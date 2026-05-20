@@ -9,7 +9,7 @@ kotlinxDatetime = "0.8.0-0.6.x-compat"
 kotlinxSerializationJSON = "1.10.0"
 kotlinxCoroutines = "1.10.2"
 ksp = "2.3.8"
-javaPoet = "0.14.0"
+javaPoet = "0.15.0"
 kotlinPoet = "2.3.0"
 junit = "6.1.0"
 

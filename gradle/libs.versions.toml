@@ -4,7 +4,7 @@
 
 [versions]
 dokka = "2.2.0"
-kotlin = "2.3.21"
+kotlin = "2.4.0"
 kotlinxDatetime = "0.8.0-0.6.x-compat"
 kotlinxSerializationJSON = "1.11.0"
 kotlinxCoroutines = "1.10.2"
